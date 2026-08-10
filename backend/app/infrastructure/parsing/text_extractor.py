@@ -14,6 +14,15 @@ from docx import Document as DocxDocument
 from pypdf import PdfReader
 
 
+def _sanitize_text(text: str) -> str:
+    """
+    Postgres rejects NUL (0x00) bytes in text columns. Some PDFs produce
+    them depending on internal encoding quirks - strip them here so
+    extraction never silently corrupts an otherwise-valid document.
+    """
+    return text.replace("\x00", "")
+
+
 class ExtractionResult:
     def __init__(self, text: str, failed_pages: list[int] | None = None):
         self.text = text
@@ -26,14 +35,17 @@ class ExtractionResult:
 
 def extract_text(*, content: bytes, source_type: str) -> ExtractionResult:
     if source_type in ("txt", "md", "paste"):
-        return ExtractionResult(text=content.decode("utf-8", errors="replace"))
+        return ExtractionResult(text=_sanitize_text(content.decode("utf-8", errors="replace")))
     if source_type == "pdf":
-        return _extract_pdf(content)
+        result = _extract_pdf(content)
+        return ExtractionResult(text=_sanitize_text(result.text), failed_pages=result.failed_pages)
     if source_type == "docx":
-        return _extract_docx(content)
+        result = _extract_docx(content)
+        return ExtractionResult(text=_sanitize_text(result.text), failed_pages=result.failed_pages)
     if source_type == "url":
-        return _extract_html(content)
-    return ExtractionResult(text=content.decode("utf-8", errors="replace"))
+        result = _extract_html(content)
+        return ExtractionResult(text=_sanitize_text(result.text), failed_pages=result.failed_pages)
+    return ExtractionResult(text=_sanitize_text(content.decode("utf-8", errors="replace")))
 
 
 def _extract_pdf(content: bytes) -> ExtractionResult:
