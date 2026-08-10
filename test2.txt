@@ -1,0 +1,3 @@
+﻿The quick brown fox jumps over the lazy dog. This is a test paragraph for chunking.
+
+This is a second paragraph to make sure our chunker splits on paragraph boundaries correctly. It should end up in its own chunk or merged with the first depending on total size.
