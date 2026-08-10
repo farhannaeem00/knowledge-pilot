@@ -3,22 +3,59 @@
 import Link from "next/link";
 import { FileText, MessageSquare, FolderKanban, StickyNote, Video, Plus } from "lucide-react";
 import { useWorkspaces } from "@/hooks/use-workspaces";
+import { useQuery } from "@tanstack/react-query";
+import { apiClient } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/store/auth-store";
+import type { Document, ChatThread, Note } from "@/types/api";
 
 /**
- * Dashboard: recent uploads, recent chats, reading progress, recent
- * summaries, saved notes, recent scripts, statistics - per the original
- * spec. This step wires the layout and a real "Workspaces" stat card
- * (the only data source that exists so far); the other cards show
- * honest empty/placeholder states until their features land in later
- * steps, rather than faking data.
+ * Dashboard stat counts. Each workspace's documents/chat-threads/notes
+ * are fetched and summed client-side - there's no single "all my stuff"
+ * backend endpoint, so we fan out per-workspace. Fine at this scale
+ * (a handful of workspaces); would move server-side if that changes.
  */
+function useDashboardCounts(workspaceIds: string[]) {
+  return useQuery({
+    queryKey: ["dashboard-counts", workspaceIds],
+    queryFn: async () => {
+      let documentCount = 0;
+      let noteCount = 0;
+      let chatThreadCount = 0;
+
+      for (const workspaceId of workspaceIds) {
+        const [documents, notes] = await Promise.all([
+          apiClient.get<Document[]>(`/workspaces/${workspaceId}/documents`),
+          apiClient.get<Note[]>(`/workspaces/${workspaceId}/notes`),
+        ]);
+        documentCount += documents.length;
+        noteCount += notes.length;
+
+        // Chat threads are per-document, so fan out one more level.
+        const threadCounts = await Promise.all(
+          documents.map((doc) =>
+            apiClient
+              .get<ChatThread[]>(`/workspaces/${workspaceId}/documents/${doc.id}/chat/threads`)
+              .then((threads) => threads.length)
+              .catch(() => 0)
+          )
+        );
+        chatThreadCount += threadCounts.reduce((sum, n) => sum + n, 0);
+      }
+
+      return { documentCount, noteCount, chatThreadCount };
+    },
+    enabled: workspaceIds.length > 0,
+  });
+}
+
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
-  const { data: workspaces, isLoading } = useWorkspaces();
+  const { data: workspaces, isLoading: workspacesLoading } = useWorkspaces();
+  const workspaceIds = (workspaces ?? []).map((w) => w.id);
+  const { data: counts, isLoading: countsLoading } = useDashboardCounts(workspaceIds);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -31,11 +68,23 @@ export default function DashboardPage() {
         <StatCard
           icon={FolderKanban}
           label="Workspaces"
-          value={isLoading ? undefined : workspaces?.length ?? 0}
+          value={workspacesLoading ? undefined : workspaces?.length ?? 0}
         />
-        <StatCard icon={FileText} label="Documents" value={undefined} note="Coming soon" />
-        <StatCard icon={MessageSquare} label="Chat threads" value={undefined} note="Coming soon" />
-        <StatCard icon={StickyNote} label="Notes" value={undefined} note="Coming soon" />
+        <StatCard
+          icon={FileText}
+          label="Documents"
+          value={workspaceIds.length === 0 ? 0 : countsLoading ? undefined : counts?.documentCount ?? 0}
+        />
+        <StatCard
+          icon={MessageSquare}
+          label="Chat threads"
+          value={workspaceIds.length === 0 ? 0 : countsLoading ? undefined : counts?.chatThreadCount ?? 0}
+        />
+        <StatCard
+          icon={StickyNote}
+          label="Notes"
+          value={workspaceIds.length === 0 ? 0 : countsLoading ? undefined : counts?.noteCount ?? 0}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -50,7 +99,7 @@ export default function DashboardPage() {
             </Button>
           </CardHeader>
           <CardContent>
-            {isLoading ? (
+            {workspacesLoading ? (
               <div className="space-y-2">
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
@@ -92,12 +141,10 @@ function StatCard({
   icon: Icon,
   label,
   value,
-  note,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: number | undefined;
-  note?: string;
 }) {
   return (
     <Card>
@@ -108,11 +155,7 @@ function StatCard({
         <div>
           <p className="text-xs text-muted-foreground">{label}</p>
           {value === undefined ? (
-            note ? (
-              <p className="text-xs text-muted-foreground">{note}</p>
-            ) : (
-              <Skeleton className="mt-1 h-6 w-8" />
-            )
+            <Skeleton className="mt-1 h-6 w-8" />
           ) : (
             <p className="text-xl font-semibold">{value}</p>
           )}
